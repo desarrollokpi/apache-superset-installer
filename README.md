@@ -62,7 +62,8 @@ Este entorno está pensado para pruebas rápidas directamente contra Superset, s
   - `superset-init` → aplica migraciones y bootstrap del admin
   - `superset` web (`superset_dev_app`)
   - `superset-worker`, `superset-worker-beat` (Celery; puedes deshabilitarlos comentando los servicios)
-  - `traefik` (`superset_dev_traefik`) – reverse proxy con provider Docker
+  - `docker-proxy` (`superset_dev_docker_proxy`) – proxy de Docker Socket
+  - `traefik` (`superset_dev_traefik`) – reverse proxy con provider Docker (vía `docker-proxy`)
 - Red: `superset_dev`
 - Puertos:
   - `80` → entrypoint `web` de Traefik
@@ -91,6 +92,7 @@ Para acceder a Superset en `dev`:
   - `superset-init` (`superset_prod_init`)
   - `superset` web (`superset_prod_app`)
   - `superset-worker`, `superset-worker-beat` (Celery)
+  - `docker-proxy` (`superset_prod_docker_proxy`) – proxy de Docker Socket
   - `traefik` (`superset_prod_traefik`)
 - Red: `superset_prod`
 - Puertos:
@@ -198,7 +200,7 @@ Para `down`:
      --project-name superset_<entorno> down [ -v ]
    ```
    - Añade `-v` si pasas `--with-volumes`.
-3. Si se usa `--with-volumes`, elimina también el workspace `superset-files/superset-<entorno>/`.
+3. Si se usa `--with-volumes`, además de eliminar el workspace `superset-files/superset-<entorno>/`, intenta borrar todos los volúmenes nombrados que declara ese `docker-compose` (usando `docker compose config --volumes`).
 
 ### Wrappers de conveniencia
 
