@@ -1,0 +1,194 @@
+x-superset-image: &superset-image apache/superset:${TAG:-5.0.0}
+
+x-superset-env: &superset-env
+  SUPERSET_ENV: production
+  SUPERSET_LOAD_EXAMPLES: "no"
+  FLASK_ENV: production
+  FLASK_DEBUG: 0
+  SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?Define SUPERSET_SECRET_KEY for prod}
+  DATABASE_DIALECT: postgresql
+  DATABASE_HOST: postgres
+  DATABASE_PORT: 5432
+  DATABASE_USER: ${POSTGRES_USER:-superset}
+  DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-superset}
+  DATABASE_DB: ${POSTGRES_DB:-superset}
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  SUPERSET_EXTRA_PIP_PACKAGES: "mysqlclient mysql-connector-python"
+
+x-superset-volumes: &superset-volumes
+  - superset_prod_home:/app/superset_home
+
+services:
+  redis:
+    image: redis:7
+    container_name: superset_prod_cache
+    restart: unless-stopped
+    volumes:
+      - superset_prod_redis:/data
+    networks:
+      - superset_prod
+
+  postgres:
+    image: postgres:15
+    container_name: superset_prod_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-superset}
+      POSTGRES_USER: ${POSTGRES_USER:-superset}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-superset}
+    volumes:
+      - superset_prod_postgres:/var/lib/postgresql/data
+    networks:
+      - superset_prod
+
+  superset-init:
+    image: *superset-image
+    container_name: superset_prod_init
+    depends_on:
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+    environment:
+      <<: *superset-env
+      SUPERSET_ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@kpimanager.com}
+      SUPERSET_ADMIN_FIRSTNAME: ${SUPERSET_ADMIN_FIRSTNAME:-Prod}
+      SUPERSET_ADMIN_LASTNAME: ${SUPERSET_ADMIN_LASTNAME:-Admin}
+      SUPERSET_ARTIFACTS_DIR: /app/setup-artifacts
+    volumes:
+      - ./artifacts:/app/setup-artifacts
+      - superset_prod_home:/app/superset_home
+    command: ["/bin/bash", "/app/init_superset.sh"]
+    healthcheck:
+      disable: true
+    networks:
+      - superset_prod
+
+  superset:
+    image: *superset-image
+    container_name: superset_prod_app
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *superset-env
+      SUPERSET_LOG_LEVEL: ${SUPERSET_LOG_LEVEL:-INFO}
+      WEBDRIVER_BASEURL: "http://superset:8088/"
+    volumes: *superset-volumes
+    command: ["/app/docker/docker-bootstrap.sh", "app-gunicorn"]
+    ports:
+      - "8088:8088"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=superset_prod"
+      - "traefik.http.routers.superset_prod.rule=Host(`${SUPERSET_FQDN:-superset.kpimanager.com}`)"
+      - "traefik.http.routers.superset_prod.entrypoints=web"
+      - "traefik.http.services.superset_prod.loadbalancer.server.port=8088"
+    networks:
+      - superset_prod
+
+  superset-worker:
+    image: *superset-image
+    container_name: superset_prod_worker
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    user: "root"
+    environment:
+      <<: *superset-env
+    command: ["/app/docker/docker-bootstrap.sh", "worker"]
+    volumes: *superset-volumes
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A superset.tasks.celery_app:app inspect ping -d celery@$$HOSTNAME",
+        ]
+    networks:
+      - superset_prod
+  
+  superset-worker-beat:
+    image: *superset-image
+    container_name: superset_prod_worker_beat
+    command: ["/app/docker/docker-bootstrap.sh", "beat"]
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    user: "root"
+    environment:
+      <<: *superset-env
+      SUPERSET_LOG_LEVEL: "${SUPERSET_LOG_LEVEL:-info}"
+    volumes: *superset-volumes
+    healthcheck:
+      disable: true
+    networks:
+      - superset_prod
+
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: superset_prod_docker_proxy
+    privileged: true
+    environment:
+      - CONTAINERS=1
+      - NETWORKS=1
+      - EVENTS=1
+      - INFO=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    networks:
+      - superset_prod
+
+  traefik:
+    image: traefik:v3
+    container_name: superset_prod_traefik
+    restart: always
+    depends_on:
+      - superset
+      - docker-proxy
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+      - 127.0.0.1
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.endpoint=tcp://docker-proxy:2375"
+      - "--providers.docker.exposedByDefault=false"
+      - "--providers.docker.network=superset_prod"
+      - "--entryPoints.web.address=:80"
+      - "--api.dashboard=false"
+      - "--log.level=DEBUG"
+    ports:
+      - "80:80"
+      # - "443:443"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - superset_prod
+
+networks:
+  superset_prod:
+    driver: bridge
+
+volumes:
+  superset_prod_redis:
+    name: superset_prod_redis
+    external: false
+  superset_prod_postgres:
+    name: superset_prod_postgres
+    external: false
+  superset_prod_home:
+    name: superset_prod_home
+    external: false

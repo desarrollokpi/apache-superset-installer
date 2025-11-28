@@ -1,0 +1,159 @@
+# x-superset-image: &superset-image apachesuperset.docker.scarf.sh/apache/superset:${TAG:-5.0.0}
+x-superset-image: &superset-image apache/superset:latest-dev
+
+x-superset-env: &superset-env
+  SUPERSET_ENV: development
+  SUPERSET_LOAD_EXAMPLES: "no"
+  SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+  DATABASE_DIALECT: postgresql
+  DATABASE_HOST: postgres
+  DATABASE_PORT: 5432
+  DATABASE_USER: superset
+  DATABASE_PASSWORD: superset
+  DATABASE_DB: superset
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+
+x-superset-volumes: &superset-volumes
+  - ./superset_config.py:/app/pythonpath/superset_config.py:ro
+  - ./requirements-local.txt:/app/docker/requirements-local.txt:ro
+  - superset_local_home:/app/superset_home
+
+services:
+  redis:
+    image: redis:7
+    container_name: superset_local_cache
+    restart: unless-stopped
+    volumes:
+      - superset_local_redis:/data
+    networks:
+      - superset_local
+
+  postgres:
+    image: postgres:15
+    container_name: superset_local_db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset
+    volumes:
+      - superset_local_postgres:/var/lib/postgresql/data
+    networks:
+      - superset_local
+
+  superset-init:
+    image: *superset-image
+    container_name: superset_local_init
+    user: "root"
+    depends_on:
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+    env_file:
+      - path: ./.env.local
+        required: false
+    environment:
+      <<: *superset-env
+      SUPERSET_ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@localhost}
+      SUPERSET_ADMIN_FIRSTNAME: ${SUPERSET_ADMIN_FIRSTNAME:-Local}
+      SUPERSET_ADMIN_LASTNAME: ${SUPERSET_ADMIN_LASTNAME:-Admin}
+      SUPERSET_ARTIFACTS_DIR: /app/setup-artifacts
+    volumes:
+      - ./artifacts:/app/setup-artifacts
+      - ./init_superset.sh:/app/init_superset.sh:ro
+      - ./superset_config.py:/app/pythonpath/superset_config.py:ro
+      - superset_local_home:/app/superset_home
+    command: ["/bin/bash", "/app/init_superset.sh"]
+    # volumes: *superset-volumes
+    # command: ["/app/docker/docker-init.sh"]
+    healthcheck:
+      disable: true
+    networks:
+      - superset_local
+
+  superset:
+    image: *superset-image
+    container_name: superset_local_app
+    restart: unless-stopped
+    user: "root"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    env_file:
+      - path: ./.env.local
+        required: false
+    environment:
+      <<: *superset-env
+      SUPERSET_LOG_LEVEL: debug
+    volumes: *superset-volumes
+    command: ["/app/docker/docker-bootstrap.sh", "app-gunicorn"]
+    ports:
+      - "8088:8088"
+    networks:
+      - superset_local
+
+  # superset-worker:
+  #   image: *superset-image
+  #   container_name: superset_local_worker
+  #   restart: unless-stopped
+  #   depends_on:
+  #     superset-init:
+  #       condition: service_completed_successfully
+  #   user: "root"
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   environment:
+  #     <<: *superset-env
+  #   command: ["/app/docker/docker-bootstrap.sh", "worker"]
+  #   volumes: *superset-volumes
+  #   healthcheck:
+  #     test:
+  #       [
+  #         "CMD-SHELL",
+  #         "celery -A superset.tasks.celery_app:app inspect ping -d celery@$$HOSTNAME",
+  #       ]
+  #   networks:
+  #     - superset_local
+
+  # superset-worker-beat:
+  #   image: *superset-image
+  #   container_name: superset_local_worker_beat
+  #   command: ["/app/docker/docker-bootstrap.sh", "beat"]
+  #   user: "root"
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   restart: unless-stopped
+  #   depends_on:
+  #     superset-init:
+  #       condition: service_completed_successfully
+  #   environment:
+  #     <<: *superset-env
+  #     SUPERSET_LOG_LEVEL: "${SUPERSET_LOG_LEVEL:-info}"
+  #   volumes: *superset-volumes
+  #   healthcheck:
+  #     disable: true
+  #   networks:
+  #     - superset_local
+
+networks:
+  superset_local:
+    driver: bridge
+
+volumes:
+  superset_local_redis:
+    name: superset_local_redis
+    external: false
+  superset_local_postgres:
+    name: superset_local_postgres
+    external: false
+  superset_local_home:
+    name: superset_local_home
+    external: false
