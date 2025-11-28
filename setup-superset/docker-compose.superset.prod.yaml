@@ -1,11 +1,12 @@
-x-superset-image: &superset-image apache/superset:${TAG:-5.0.0}
+x-superset-image: &superset-image apache/superset:5.0.0
 
 x-superset-env: &superset-env
   SUPERSET_ENV: production
   SUPERSET_LOAD_EXAMPLES: "no"
+  SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
   FLASK_ENV: production
   FLASK_DEBUG: 0
-  SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?Define SUPERSET_SECRET_KEY for prod}
+  SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-SUPERSET_SECRET_KEY}
   DATABASE_DIALECT: postgresql
   DATABASE_HOST: postgres
   DATABASE_PORT: 5432
@@ -14,9 +15,10 @@ x-superset-env: &superset-env
   DATABASE_DB: ${POSTGRES_DB:-superset}
   REDIS_HOST: redis
   REDIS_PORT: 6379
-  SUPERSET_EXTRA_PIP_PACKAGES: "mysqlclient mysql-connector-python"
 
 x-superset-volumes: &superset-volumes
+  - ./superset_config.py:/app/pythonpath/superset_config.py:ro
+  - ./requirements-local.txt:/app/docker/requirements-local.txt:ro
   - superset_prod_home:/app/superset_home
 
 services:
@@ -33,6 +35,8 @@ services:
     image: postgres:15
     container_name: superset_prod_db
     restart: unless-stopped
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-superset}
       POSTGRES_USER: ${POSTGRES_USER:-superset}
@@ -45,23 +49,31 @@ services:
   superset-init:
     image: *superset-image
     container_name: superset_prod_init
+    user: "root"
     depends_on:
       postgres:
         condition: service_started
       redis:
         condition: service_started
+    env_file:
+      - path: ./.env.local
+        required: false
     environment:
       <<: *superset-env
       SUPERSET_ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-}
-      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@kpimanager.com}
-      SUPERSET_ADMIN_FIRSTNAME: ${SUPERSET_ADMIN_FIRSTNAME:-Prod}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@localhost}
+      SUPERSET_ADMIN_FIRSTNAME: ${SUPERSET_ADMIN_FIRSTNAME:-Local}
       SUPERSET_ADMIN_LASTNAME: ${SUPERSET_ADMIN_LASTNAME:-Admin}
       SUPERSET_ARTIFACTS_DIR: /app/setup-artifacts
     volumes:
       - ./artifacts:/app/setup-artifacts
+      - ./init_superset.sh:/app/init_superset.sh:ro
+      - ./superset_config.py:/app/pythonpath/superset_config.py:ro
       - superset_prod_home:/app/superset_home
     command: ["/bin/bash", "/app/init_superset.sh"]
+    # volumes: *superset-volumes
+    # command: ["/app/docker/docker-init.sh"]
     healthcheck:
       disable: true
     networks:
@@ -71,70 +83,73 @@ services:
     image: *superset-image
     container_name: superset_prod_app
     restart: unless-stopped
+    user: "root"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       superset-init:
         condition: service_completed_successfully
+    env_file:
+      - path: ./.env.local
+        required: false
     environment:
       <<: *superset-env
-      SUPERSET_LOG_LEVEL: ${SUPERSET_LOG_LEVEL:-INFO}
-      WEBDRIVER_BASEURL: "http://superset:8088/"
+      SUPERSET_LOG_LEVEL: debug
     volumes: *superset-volumes
     command: ["/app/docker/docker-bootstrap.sh", "app-gunicorn"]
-    ports:
-      - "8088:8088"
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=superset_prod"
       - "traefik.http.routers.superset_prod.rule=Host(`${SUPERSET_FQDN:-superset.kpimanager.com}`)"
       - "traefik.http.routers.superset_prod.entrypoints=web"
       - "traefik.http.services.superset_prod.loadbalancer.server.port=8088"
+    ports:
+      - "8088:8088"
     networks:
       - superset_prod
 
-  superset-worker:
-    image: *superset-image
-    container_name: superset_prod_worker
-    restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      superset-init:
-        condition: service_completed_successfully
-    user: "root"
-    environment:
-      <<: *superset-env
-    command: ["/app/docker/docker-bootstrap.sh", "worker"]
-    volumes: *superset-volumes
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "celery -A superset.tasks.celery_app:app inspect ping -d celery@$$HOSTNAME",
-        ]
-    networks:
-      - superset_prod
+  # superset-worker:
+  #   image: *superset-image
+  #   container_name: superset_prod_worker
+  #   restart: unless-stopped
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   depends_on:
+  #     superset-init:
+  #       condition: service_completed_successfully
+  #   user: "root"
+  #   environment:
+  #     <<: *superset-env
+  #   command: ["/app/docker/docker-bootstrap.sh", "worker"]
+  #   volumes: *superset-volumes
+  #   healthcheck:
+  #     test:
+  #       [
+  #         "CMD-SHELL",
+  #         "celery -A superset.tasks.celery_app:app inspect ping -d celery@$$HOSTNAME",
+  #       ]
+  #   networks:
+  #     - superset_prod
   
-  superset-worker-beat:
-    image: *superset-image
-    container_name: superset_prod_worker_beat
-    command: ["/app/docker/docker-bootstrap.sh", "beat"]
-    restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      superset-init:
-        condition: service_completed_successfully
-    user: "root"
-    environment:
-      <<: *superset-env
-      SUPERSET_LOG_LEVEL: "${SUPERSET_LOG_LEVEL:-info}"
-    volumes: *superset-volumes
-    healthcheck:
-      disable: true
-    networks:
-      - superset_prod
+  # superset-worker-beat:
+  #   image: *superset-image
+  #   container_name: superset_prod_worker_beat
+  #   command: ["/app/docker/docker-bootstrap.sh", "beat"]
+  #   restart: unless-stopped
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   depends_on:
+  #     superset-init:
+  #       condition: service_completed_successfully
+  #   user: "root"
+  #   environment:
+  #     <<: *superset-env
+  #     SUPERSET_LOG_LEVEL: "${SUPERSET_LOG_LEVEL:-info}"
+  #   volumes: *superset-volumes
+  #   healthcheck:
+  #     disable: true
+  #   networks:
+  #     - superset_prod
 
   docker-proxy:
     image: tecnativa/docker-socket-proxy
