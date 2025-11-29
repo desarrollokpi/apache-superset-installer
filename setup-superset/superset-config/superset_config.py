@@ -15,9 +15,9 @@ WTF_CSRF_ENABLED = False
 WTF_CSRF_EXEMPT_LIST = ["*"]
 
 # # Cookies wide open so embeds and HTTP proxying just work locally.
-SESSION_COOKIE_HTTPONLY = False
-SESSION_COOKIE_SECURE = False
-SESSION_COOKIE_SAMESITE = "None"
+# SESSION_COOKIE_HTTPONLY = False
+# SESSION_COOKIE_SECURE = False
+# SESSION_COOKIE_SAMESITE = "None"
 
 # HTTP headers configuration.
 # According to the official docs, X-Frame-Options defaults to SAMEORIGIN.
@@ -25,9 +25,7 @@ SESSION_COOKIE_SAMESITE = "None"
 # ENABLE_PROXY_FIX = True
 # PROXY_FIX_CONFIG = {"x_for": 1, "x_proto": 1, "x_host": 1, "x_port": 1, "x_prefix": 1}
 # PREFERRED_URL_SCHEME = "http"
-OVERRIDE_HTTP_HEADERS = {
-    "X-Frame-Options": "ALLOWALL",
-}
+OVERRIDE_HTTP_HEADERS = { "X-Frame-Options": "ALLOWALL" }
 
 # Disable Talisman so it does not re-impose restrictive security headers
 # that would conflict with the custom X-Frame-Options above.
@@ -47,3 +45,4 @@ try:
     )
 except ImportError:
     logger.info("Using default Docker config...")
+

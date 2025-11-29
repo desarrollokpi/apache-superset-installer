@@ -97,7 +97,6 @@ services:
     command: ["/app/docker/docker-bootstrap.sh", "app-gunicorn"]
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=superset_dev"
       - "traefik.http.routers.superset_dev.rule=Host(`dev.kpimanagers.com`)"
       - "traefik.http.routers.superset_dev.entrypoints=web"
       - "traefik.http.services.superset_dev.loadbalancer.server.port=8088"
@@ -179,7 +178,6 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.endpoint=tcp://docker-proxy:2375"
       - "--providers.docker.exposedByDefault=false"
-      - "--providers.docker.network=superset_dev"
       - "--entryPoints.web.address=:80"
       - "--api.dashboard=false"
       - "--log.level=DEBUG"
